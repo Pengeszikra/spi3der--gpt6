@@ -2,7 +2,7 @@ mod json;mod scene;mod render;mod store;mod md;
 use std::{io::{self,Read,Write,IsTerminal},fs,process::Command,time::Instant};
 use scene::*;
 use render::*;
-const VERSION:&str="26.11.27001";
+const VERSION:&str=env!("CARGO_PKG_VERSION");
 const HELP:&str=include_str!("../HELP.md");
 fn load(n:&str)->Result<Scene,String>{let p=std::path::Path::new(n);let p=if p.is_file(){p.to_owned()}else{store::path(n).map_err(|e|e.to_string())?};Scene::read(&fs::read_to_string(p).map_err(|e|e.to_string())?)}
 struct App{scene:Scene,view:View,target:Option<usize>,face:Option<usize>,edit:bool,undo:Vec<Scene>,note:String}

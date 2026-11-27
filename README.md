@@ -1,5 +1,7 @@
 # spi3derr — GPT-6 competition entry
 
+Release versions use `YY.MM.DDNNN` (daily sequence, e.g. `26.11.27002`). The CLI and Cargo share the package version. Previously published `0.1.0` remains the original competition baseline.
+
 Reference: Spider-Paint 26.11.26003, commit 6f29a123f92e50aaa044d0f6c272b387ad0e697f.
 
 **Initial prototype, not feature parity.** Zero Cargo dependencies, no browser or JS runtime. Unix interactive terminal uses the OS stty utility. No Windows support yet.
