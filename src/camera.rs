@@ -178,6 +178,31 @@ pub struct Flight {
     pub cruise: V,
     pub gravity: Option<(V, V)>,
 }
+pub fn sky_quantity(v: f64) -> String {
+    if v >= 1e9 {
+        format!("{:.1}G", v / 1e9)
+    } else if v >= 1e6 {
+        format!("{:.1}M", v / 1e6)
+    } else if v >= 1e4 {
+        format!("{:.1}k", v / 1e3)
+    } else if v >= 100. {
+        format!("{v:.0}")
+    } else if v >= 1. {
+        format!("{v:.1}")
+    } else {
+        format!("{v:.2}")
+    }
+}
+pub fn sky_distance(ly: f64) -> String {
+    let (n, unit) = if ly == 0. || ly >= 0.01 {
+        (ly, "ly")
+    } else if ly * 63241.077 >= 0.01 {
+        (ly * 63241.077, "AU")
+    } else {
+        (ly * 9.4607304725808e12, "km")
+    };
+    format!("{} {unit}", sky_quantity(n))
+}
 impl Flight {
     pub fn active(&self) -> bool {
         !self.frozen
@@ -201,6 +226,14 @@ impl Flight {
                 self.unit * self.throttle,
             ),
         )
+    }
+    pub fn indicated_speed(&self, v: &View, locked: bool) -> f64 {
+        if locked && (!v.sky || self.orbit) {
+            let [f, r, u] = self.levels.map(Self::pace);
+            (f * 0.09).hypot(0.175 * r.hypot(u)) * v.dist / v.zoom
+        } else {
+            len(self.velocity(v))
+        }
     }
     pub fn gravity_at(&mut self, v: &View, at: V) {
         let radial = sub(v.eye(), at);

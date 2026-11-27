@@ -186,7 +186,9 @@ impl Ui {
                     self.zen = !self.zen
                 } else if !value.is_empty() {
                     self.quit = !a.command(&value)?;
-                    self.saved_view = None;
+                    if !a.edit {
+                        self.saved_view = None;
+                    }
                 }
             }
             _ => {}
@@ -1242,8 +1244,7 @@ pub fn run(mut a: App, mut session: Option<Session>) -> Result<(), String> {
                 vec![String::new(); h]
             };
             let target = a.target.and_then(|i| a.scene.objects.get(i));
-            let distance = target.map(|o| len(sub(a.view.eye(), o.center)));
-            let unit = if a.scene.sky { "ly" } else { "m" };
+            let distance = target.map(|o| (len(sub(a.view.eye(), o.center)) - o.radius).max(0.));
             let mode = if a.edit {
                 "Q edit"
             } else if a.flight.orbit {
@@ -1255,15 +1256,27 @@ pub fn run(mut a: App, mut session: Option<Session>) -> Result<(), String> {
             } else {
                 "view"
             };
-            let status = format!(
+            let mut status = format!(
                 "{BUILD} | {mode} | {} objects | {} {} | W{} D{} R{}",
                 a.scene.objects.len(),
                 target.map_or("-", |o| o.name.as_str()),
-                distance.map_or(String::new(), |v| format!("{v:.4} {unit}")),
+                distance.map_or(String::new(), |v| if a.scene.sky {
+                    sky_distance(v)
+                } else {
+                    format!("{v:.4} m")
+                }),
                 a.flight.levels[0],
                 a.flight.levels[1],
                 a.flight.levels[2]
             );
+            if a.scene.sky {
+                let v = a.flight.indicated_speed(&a.view, target.is_some());
+                status.push_str(&format!(
+                    " | {}/s · {} c",
+                    sky_distance(v),
+                    sky_quantity(v * 31_557_600.)
+                ));
+            }
             lines.push(if ui.zen {
                 String::new()
             } else {
@@ -1363,4 +1376,69 @@ pub fn run(mut a: App, mut session: Option<Session>) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mouse_region_preview_cancel_paint_and_undo() {
+        let mut a = App::new(Scene {
+            objects: vec![Object::cube("Block".into(), [150, 150, 150])],
+            ..Scene::default()
+        });
+        let mut ui = Ui::default();
+        let frame = |a: &App| render(&a.scene, &a.view, 80, 48, a.target, a.face);
+        let f = frame(&a);
+        ui.key(&mut a, &f, Key::Char('q')).unwrap();
+        let f = frame(&a);
+        let original = a.scene.objects[0].p.clone();
+        for (mode, count) in [('1', 8), ('2', 12), ('3', 6)] {
+            ui.key(&mut a, &f, Key::Char(mode)).unwrap();
+            ui.key(&mut a, &f, Key::Char('b')).unwrap();
+            if mode == '2' {
+                ui.key(&mut a, &f, Key::Char('b')).unwrap();
+            }
+            ui.mouse(&mut a, &f, 0, 0, 0, false).unwrap();
+            for (x, y) in [(79, 0), (79, 23), (0, 23)] {
+                ui.mouse(&mut a, &f, 32, x, y, false).unwrap();
+            }
+            let end = if mode == '2' { (0, 0) } else { (79, 23) };
+            ui.mouse(&mut a, &f, 0, end.0, end.1, true).unwrap();
+            assert_eq!(a.sel.parts.len(), count);
+        }
+        ui.key(&mut a, &f, Key::Char('g')).unwrap();
+        ui.mouse(&mut a, &f, 35, 60, 17, false).unwrap();
+        assert_ne!(a.scene.objects[0].p, original);
+        ui.key(&mut a, &f, Key::Esc).unwrap();
+        assert_eq!(a.scene.objects[0].p, original);
+        let (oi, fi) = f.hit(40, 24).unwrap();
+        a.material = "wood".into();
+        ui.mouse(&mut a, &f, 16, 40, 12, false).unwrap();
+        ui.mouse(&mut a, &f, 16, 40, 12, true).unwrap();
+        assert_eq!(
+            Scene::read(&a.scene.write()).unwrap().objects[oi].f[fi].mat,
+            "wood"
+        );
+        ui.key(&mut a, &f, Key::Char('u')).unwrap();
+        assert_ne!(a.scene.objects[oi].f[fi].mat, "wood");
+        ui.key(&mut a, &f, Key::Esc).unwrap();
+        assert!(!a.edit);
+    }
+
+    #[test]
+    fn space_flight_units() {
+        assert_eq!(sky_distance(0.), "0.00 ly");
+        assert_eq!(sky_distance(1. / 63241.077), "1.0 AU");
+        assert_eq!(sky_distance(300. / 9.4607304725808e12), "300 km");
+        assert_eq!(sky_distance(2e6), "2.0M ly");
+        let v = View {
+            dist: 100.,
+            ..View::default()
+        };
+        let mut f = Flight::default();
+        f.speed(1, 1);
+        assert!((f.indicated_speed(&v, true) - 17.5).abs() < 1e-9);
+    }
 }
