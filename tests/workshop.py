@@ -132,13 +132,20 @@ def table_and_cup(path):
         editor.send(b"q3a")
         editor.expect(b"Q edit")
         editor.send(b"gx0.02\r")
-        time.sleep(.25)
-        state=json.loads(c2.tool("scene_state"))
-        edited=next(o for o in state["objects"] if o["name"]=="Coffee mug")
-        assert abs(edited["center"][0]-.26)<1e-6, edited
+        # An editor writing a full Q frame can block on a small PTY output queue.
+        # Drain it as a real terminal would and observe the committed result from MCP.
+        def wait_center(client, expected):
+            end = time.monotonic() + 6
+            while time.monotonic() < end:
+                editor.read(.05)
+                state = json.loads(client.tool("scene_state"))
+                edited = next(o for o in state["objects"] if o["name"] == "Coffee mug")
+                if abs(edited["center"][0] - expected) < 1e-6:
+                    return
+            raise AssertionError((edited, editor.buffer[-900:]))
+        wait_center(c2, .26)
         editor.send(b"u")
-        time.sleep(.25)
-        assert abs(next(o for o in json.loads(c.tool("scene_state"))["objects"] if o["name"]=="Coffee mug")["center"][0]-.24)<1e-6
+        wait_center(c, .24)
         if opt.write_table: opt.write_table.write_bytes(path.read_bytes())
     finally:
         editor.close();c.close();c2.close()
