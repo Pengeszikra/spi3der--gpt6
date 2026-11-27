@@ -1,0 +1,208 @@
+{
+  "tools": [
+    {
+      "name": "scene_list",
+      "description": "List names of objects in the live editor.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "scene_state",
+      "description": "Read current revision, object names, centers and radii.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "scene_export",
+      "description": "Return the complete live 3Draft document.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "scene_command",
+      "description": "Execute a native editor command such as /load, /add, /go, /face, /g, /undo or /dl.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string",
+            "description": "Optional expected scene revision returned by scene_state"
+          }
+        },
+        "required": [
+          "command"
+        ]
+      }
+    },
+    {
+      "name": "add_primitives",
+      "description": "Add a batch of named solids atomically. Position is the center of the bounding box. Size is full width, height and depth.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objects": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "shape": {
+                  "enum": [
+                    "box",
+                    "cylinder",
+                    "cone",
+                    "pyramid",
+                    "prism",
+                    "sphere"
+                  ]
+                },
+                "center": {
+                  "type": "array",
+                  "minItems": 3,
+                  "maxItems": 3,
+                  "items": {
+                    "type": "number"
+                  }
+                },
+                "size": {
+                  "type": "array",
+                  "minItems": 3,
+                  "maxItems": 3,
+                  "items": {
+                    "type": "number"
+                  }
+                },
+                "material": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "shape",
+                "center",
+                "size"
+              ]
+            }
+          },
+          "revision": {
+            "type": "string",
+            "description": "Optional expected scene revision returned by scene_state"
+          }
+        },
+        "required": [
+          "objects"
+        ]
+      }
+    },
+    {
+      "name": "add_mesh",
+      "description": "Add an editable indexed polygon mesh in world space.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "positions": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": {
+                "type": "number"
+              }
+            }
+          },
+          "faces": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "minItems": 3,
+              "items": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "material": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string",
+            "description": "Optional expected scene revision returned by scene_state"
+          }
+        },
+        "required": [
+          "name",
+          "positions",
+          "faces"
+        ]
+      }
+    },
+    {
+      "name": "lathe_profile",
+      "description": "Revolve a height/radius profile about world Y. A profile that folds back down the inside creates a hollow cup.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number"
+            }
+          },
+          "profile": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "segments": {
+            "type": "integer",
+            "minimum": 4,
+            "maximum": 512
+          },
+          "material": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string",
+            "description": "Optional expected scene revision returned by scene_state"
+          }
+        },
+        "required": [
+          "name",
+          "origin",
+          "profile"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "spi3derr": {
+      "type": "stdio",
+      "command": "./target/release/spi3derr",
+      "args": ["--mcp"],
+      "tools": ["*"]
+    }
+  }
+}

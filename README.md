@@ -1,35 +1,49 @@
-# spi3derr — GPT-6 competition entry
+# spi3derr
 
-Release versions use `YY.MM.DDNNN` (daily sequence, e.g. `26.11.27002`). The CLI and Cargo share the package version. Previously published `0.1.0` remains the original competition baseline.
+A native terminal 3D editor and MCP modeling server written in Rust. One executable runs the editor, renders Markdown, exports images and serves MCP over stdio. It uses the Rust standard library and the terminal interfaces of macOS and Linux.
 
-Reference: Spider-Paint 26.11.26003, commit 6f29a123f92e50aaa044d0f6c272b387ad0e697f.
+This is the GPT-6 Round III port of [Spider-Paint 26.11.26003](https://github.com/Pengeszikra/Spider-Paint/tree/6f29a123f92e50aaa044d0f6c272b387ad0e697f). The [benchmark and compatibility matrix](BENCHMARK.md) record which workflows have been exercised and where parity is incomplete.
 
-**Initial prototype, not feature parity.** Zero Cargo dependencies, no browser or JS runtime. Unix interactive terminal uses the OS stty utility. No Windows support yet.
+## Open the globe
 
-```sh
-cargo run --release
-cargo run --release -- --scene model.3draft
-cargo run --release -- --once --cols 80 --rows 24
-cargo run --release -- --bench 1000 --cols 120 --rows 40
-cargo run --release -- --markdown HELP.md
+~~~sh
+cargo build --release
+./target/release/spi3derr globe
+~~~
+
+Press **T**, then tap **D** once. The globe keeps turning. Further taps increase orbital speed. **Space** stops motion and keeps the target. **Esc** releases it. **Enter**, type **/load**, then **Enter** opens the catalogue. Type part of a name, use ↑ or ↓ and press Enter. To fly among the 5,149 Deep Sky objects, load **deepsky**, press **Enter**, type a star name and confirm. **Tab** and **Shift+Tab** cycle targets.
+
+**Q** enters mesh editing. **1**, **2** and **3** switch between vertices, edges and faces. Select with the pointer. **G**, **S**, **R** and **E** start a live transform. Move the pointer or enter an axis and a number. Click or press **Enter** to accept, **Esc** to cancel, **U** to undo. **P** opens the material palette. **?** opens the original help pages. **Ctrl+C** exits.
+
+## Shared workshop
+
+From the repository root, build once and choose a fresh path for an empty workshop.
+
+~~~sh
+export SPI3DERR_SESSION="$PWD/my-workshop.3draft"
+./target/release/spi3derr --session "$SPI3DERR_SESSION"
+~~~
+
+Start GitHub Copilot CLI in the same repository with the same exported variable. The project's [.mcp.json](.mcp.json) registers the release executable. Use an absolute executable path if installing this configuration elsewhere. To inspect registration, run:
+
+~~~sh
+copilot mcp get spi3derr --json
+~~~
+
+Ask the client to read the scene revision, add the tabletop and four legs with **add_primitives**, turn a hollow mug profile with **lathe_profile** and attach a handle with **add_mesh**. Pass the revision when applying an edit based on a prior read. Changes appear in the live editor. Q edits publish back to MCP. An independent protocol client exercises this sequence in [tests/workshop.py](tests/workshop.py).
+
+The default shared document is ~/.spi3derr/workshop.3draft. Explicit **--scene FILE --watch** also shares a file. **/save name** writes to ~/.spi3derr/store; SPI3DER_STORE overrides the directory. The catalogue searches the store and models/. **/dl path.3draft** exports the current document, and **/merge name** imports objects. Keep the models/ directory in the working directory or beside an installed binary to use the supplied catalogue.
+
+## Other entry points
+
+~~~sh
+./target/release/spi3derr --version
+./target/release/spi3derr --md README.md
+./target/release/spi3derr --md models/table.scene.json
+./target/release/spi3derr --scene lark-4 --once --cols 120 --rows 40
+./target/release/spi3derr --mcp
 cargo test
-```
+python3 tests/measure.py
+~~~
 
-Native orthographic triangle rasterizer, depth buffer, truecolor half blocks, changed-row output, face picking, cube creation, numeric transforms, face extrusion, undo, geometry-only scene import/export, local atomic store, basic Markdown highlighting, object rotation outside Q. Benchmark measures render plus checksum, excludes terminal I/O.
-
-Store defaults to ~/.spi3derr/store; SPI3DER_STORE overrides it. Save replaces the named scene atomically; no cloud sync. Import flattens face materials to RGB. Export does not preserve unknown scene fields, camera, animation, assets, wires or material parameters: use a new filename.
-
-Known gaps: full reference keyboard mapping, vertex/edge selection, concave polygons, perspective/flight, sky/instances, full Markdown layout, live resize while idle, mouse drag, Unicode interactive input, robust escape decoding, signal restoration, boolean, mirror, bevel, loop cut, saw, lathe, palette, story playback and exports. Do not treat benchmark as parity comparison yet.
-
-See HELP.md for implemented commands. Rust compiler was unavailable in authoring environment; CI is configured to compile and test this prototype.
-
-## Round II — incremental update
-
-- `--mcp`: newline-delimited JSON-RPC stdio, initialize, ping, tools/list and tools/call. The server owns an independent scene. Use /dl with a file path to publish to the viewer.
-- `--scene table.3draft --watch`: polls the file, retains last valid geometry on parse errors, preserves view settings and target by name. Auto-fit bounds still change with geometry; polling currently redraws even on idle.
-- `--md file.json`: JSON lexical highlighting, also .3draft; alias for --markdown.
-- `/load` without arguments lists local store names.
-
-Copilot MCP config: command = absolute path to target/release/spi3derr, args = ["--mcp"], type = stdio. No external crates.
-
-Still incomplete: full reference Q tools, complete help/palette, exact flight/targeting, sky support, shared live editing conflicts, full syntax highlighting parity. CI compilation not yet verified.
+The [original help index](help/index.md) links to the flight, modeling, palette, command and story documentation. It also describes features of Spider-Paint that are listed as partial or missing in the compatibility matrix.

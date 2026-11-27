@@ -1,45 +1,717 @@
-mod json;mod scene;mod render;mod store;mod md;mod mcp;mod highlight;
-use std::{io::{self,Read,Write,IsTerminal},fs,process::Command,time::Instant};
-use scene::*;
+mod bench;
+mod bevel;
+mod camera;
+mod csg;
+mod edit;
+mod export;
+mod geometry;
+mod session;
+mod terminal;
+mod ui;
+use camera::*;
+use geometry::*;
+use json::J;
+use session::Session;
+mod highlight;
+mod json;
+mod mcp;
+mod md;
+mod render;
+mod scene;
+mod store;
 use render::*;
-const VERSION:&str=env!("CARGO_PKG_VERSION");
-const HELP:&str=include_str!("../HELP.md");
-fn load(n:&str)->Result<Scene,String>{let p=std::path::Path::new(n);let p=if p.is_file(){p.to_owned()}else{store::path(n).map_err(|e|e.to_string())?};Scene::read(&fs::read_to_string(p).map_err(|e|e.to_string())?)}
-struct App{scene:Scene,view:View,target:Option<usize>,face:Option<usize>,edit:bool,undo:Vec<Scene>,note:String}
-impl App{
- fn new(scene:Scene)->Self{Self{scene,view:View::default(),target:None,face:None,edit:false,undo:vec![],note:String::new()}}
- fn snapshot(&mut self){if self.undo.len()==32{self.undo.remove(0);}self.undo.push(self.scene.clone())}
- fn active(&self)->Result<usize,String>{self.target.filter(|&i|i<self.scene.objects.len()).ok_or("select an object first".into())}
- fn command(&mut self,line:&str)->Result<bool,String>{let line=line.trim();let (cmd,arg)=line.split_once(' ').unwrap_or((line,""));let arg=arg.trim();let words:Vec<_>=arg.split_whitespace().collect();match cmd{
- "/q"|"/quit"=>return Ok(false),
- "/ver"=>self.note=VERSION.into(),
- "/add"=>{if arg!="box"&&arg!="cube"{return Err("only box supported currently".into())}self.snapshot();let i=self.scene.objects.len();let mut o=Object::cube(format!("Cube {}",i+1),[200,175,120]);for p in &mut o.p{p[0]+=i as f64*1.2;}self.scene.objects.push(o);self.target=Some(i);},
- "/new"=>{self.snapshot();self.scene=Scene::default();self.target=None;self.face=None;self.edit=false},
- "/l"|"/load"|"/open"|"/merge"=>{if arg.is_empty(){self.note=store::list().map_err(|e|e.to_string())?.join(" | ");return Ok(true)}let s=load(arg)?;self.snapshot();if cmd=="/merge"{self.scene.objects.extend(s.objects)}else{self.scene=s;self.target=None;self.face=None;self.edit=false}},
- "/s"|"/save"=>{let p=store::path(arg).map_err(|e|e.to_string())?;store::atomic(&p,&self.scene.write()).map_err(|e|e.to_string())?;self.note=format!("saved {}",p.display())},
- "/dl"=>{if arg.is_empty(){return Err("/dl file.3draft".into())}store::atomic(std::path::Path::new(arg),&self.scene.write()).map_err(|e|e.to_string())?;self.note="exported geometry".into()},
- "/store"=>self.note=store::list().map_err(|e|e.to_string())?.join(" | "),
- "/forget"=>{fs::remove_file(store::path(arg).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;self.note="removed".into()},
- "/ls"|"/objects"=>self.note=self.scene.objects.iter().map(|o|o.name.as_str()).collect::<Vec<_>>().join(" | "),
- "/view"=>{let (y,p)=match arg{"front"=>(0.,0.),"back"=>(180.,0.),"left"=>(-90.,0.),"right"=>(90.,0.),"top"=>(0.,90.),"bottom"=>(0.,-90.),"iso"=>(-45.,30.),_=>return Err("unknown view".into())};self.view.yaw=y;self.view.pitch=p;},
- "/fit"|"/reset"=>{self.view.zoom=1.;self.view.pan=[0.;2]},
- "/zoom"=>{self.view.zoom=arg.parse::<f64>().map_err(|_|"zoom number")?.clamp(0.05,100.);if !self.view.zoom.is_finite(){self.view.zoom=1.}},
- "/face"=>{let i=self.active()?;let f=arg.parse::<usize>().map_err(|_|"face index")?;if f>=self.scene.objects[i].f.len(){return Err("face index out of bounds".into())}self.face=Some(f)},
- "/g"|"/scl"|"/r"=>{if words.len()!=2{return Err("axis and value required".into())}let axis=match words[0]{"x"=>0,"y"=>1,"z"=>2,"all" if cmd=="/scl"=>3,_=>return Err("axis x/y/z".into())};let n=words[1].parse::<f64>().map_err(|_|"value")?;if !n.is_finite(){return Err("finite value required".into())}let i=self.active()?;let o=&self.scene.objects[i];let ids=if self.edit{self.face.and_then(|f|o.f.get(f)).map(|f|f.v.clone()).unwrap_or_else(||(0..o.p.len()).collect())}else{(0..o.p.len()).collect()};self.snapshot();self.scene.objects[i].transform(match cmd{"/g"=>"g","/r"=>"r",_=>"s"},axis,n,&ids)},
- "/e"=>{if !self.edit{return Err("enter Q mode first".into())}let i=self.active()?;let f=self.face.ok_or("select face")?;let d=arg.parse::<f64>().map_err(|_|"distance")?;if !d.is_finite(){return Err("finite distance required".into())}self.snapshot();self.scene.objects[i].extrude(f,d)?},
- "/undo"=>{if let Some(s)=self.undo.pop(){self.scene=s;self.target=None;self.face=None;self.edit=false}},
- "/help"|"/keys"=>self.note="Q edit | T target | Enter commands | ? help | Ctrl+C exit".into(),
- ""=>{},
- _ if !cmd.starts_with('/')=>{let q=line.to_lowercase();self.target=self.scene.objects.iter().position(|o|o.name.to_lowercase().contains(&q));self.face=None;if self.target.is_none(){return Err("not found".into())}},
- _=>return Err(format!("unsupported command: {cmd}"))}Ok(true)}
+use scene::*;
+use std::{
+    fs,
+    io::{self, IsTerminal, Read, Write},
+    time::Instant,
+};
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const BUILD: &str = concat!(env!("CARGO_PKG_VERSION"), " ", env!("BUILD_HASH"));
+const HELP: &str = include_str!("../help/index.md");
+fn load(n: &str) -> Result<Scene, String> {
+    let p = store::resolve(n)?;
+    Scene::read(&fs::read_to_string(p).map_err(|e| e.to_string())?)
 }
-struct Terminal{saved:String}
-impl Terminal{fn enter()->io::Result<Self>{let o=Command::new("stty").arg("-g").stdin(std::process::Stdio::inherit()).output()?;if !o.status.success(){return Err(io::Error::other("stty -g failed"))}let saved=String::from_utf8_lossy(&o.stdout).trim().to_owned();let t=Self{saved};if !Command::new("stty").args(["raw","-echo","min","0","time","2"]).status()?.success(){return Err(io::Error::other("stty raw failed"))}print!("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[2J");io::stdout().flush()?;Ok(t)}}
-impl Drop for Terminal{fn drop(&mut self){print!("\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l");let _=io::stdout().flush();let _=Command::new("stty").arg(&self.saved).status();}}
-fn size()->(usize,usize){let o=Command::new("stty").arg("size").stdin(std::process::Stdio::inherit()).output().ok();let s=o.as_ref().map(|o|String::from_utf8_lossy(&o.stdout)).unwrap_or_default();let mut it=s.split_whitespace().filter_map(|x|x.parse::<usize>().ok());let h=it.next().unwrap_or(24);let w=it.next().unwrap_or(80);(w.clamp(10,400),h.saturating_sub(2).clamp(4,200))}
-fn next_target(f:&Frame,n:usize,current:Option<usize>,reverse:bool)->Option<usize>{let mut dist=vec![usize::MAX;n];for (k,id) in f.ids.iter().enumerate(){if let Some((o,_))=*id{if o<n{let dx=(k%f.w).abs_diff(f.w/2);let dy=(k/f.w).abs_diff(f.h/2);dist[o]=dist[o].min(dx*dx+dy*dy)}}}let mut order:Vec<usize>=(0..n).collect();order.sort_by_key(|&o|(dist[o],o));if n==0{return None}let i=current.and_then(|o|order.iter().position(|&x|x==o));Some(order[match i{Some(i) if reverse=>(i+n-1)%n,Some(i)=>(i+1)%n,None if reverse=>n-1,None=>0}])}
-fn run_tui(mut a:App,watch:Option<String>)->Result<(),String>{let _term=Terminal::enter().map_err(|e|e.to_string())?;let mut input=io::stdin().lock();let mut out=io::stdout().lock();let mut prompt=None::<String>;let mut help=false;let mut old=Vec::<String>::new();let mut esc=Vec::<u8>::new();let mut previous_size=(0,0);let mut last_poll=Instant::now();let mut last_file=watch.as_ref().and_then(|p|fs::read_to_string(p).ok());loop{if last_poll.elapsed().as_millis()>=200{last_poll=Instant::now();if let Some(p)=&watch{if let Ok(s)=fs::read_to_string(p){if last_file.as_ref()!=Some(&s){if let Ok(scene)=Scene::read(&s){let name=a.target.and_then(|i|a.scene.objects.get(i)).map(|o|o.name.clone());a.snapshot();a.scene=scene;a.target=name.and_then(|n|a.scene.objects.iter().position(|o|o.name==n));a.face=None;a.edit=false;a.note="scene reloaded".into();last_file=Some(s);}}}}}let(w,h)=size();if previous_size!=(w,h){old.clear();write!(out,"\x1b[2J").map_err(|e|e.to_string())?;previous_size=(w,h)}let frame=render(&a.scene,&a.view,w,h*2,a.target,a.face);let rows=if help{md::ansi(HELP).lines().take(h).map(|s|s.to_owned()).collect::<Vec<_>>()}else{frame.rows()};write!(out,"\x1b[?2026h").map_err(|e|e.to_string())?;for y in 0..h{let l=rows.get(y).map(String::as_str).unwrap_or("");if old.get(y).map(String::as_str)!=Some(l){write!(out,"\x1b[{};1H{}\x1b[K",y+1,l).map_err(|e|e.to_string())?;}}old=rows;let status=format!("spi3derr {VERSION} | {} | {} objects | {}",if a.edit{"Q edit"}else{"view"},a.scene.objects.len(),a.target.and_then(|i|a.scene.objects.get(i)).map(|o|o.name.as_str()).unwrap_or("-"));let clean=|s:&str|s.chars().filter(|c|!c.is_control()).take(w.saturating_sub(1)).collect::<String>();write!(out,"\x1b[{};1H{}\x1b[K\x1b[{};1H{}\x1b[K\x1b[?2026l",h+1,clean(&status),h+2,clean(&prompt.as_ref().map(|s|format!("> {s}")).unwrap_or_else(||a.note.clone()))).map_err(|e|e.to_string())?;out.flush().map_err(|e|e.to_string())?;let mut b=[0];match input.read(&mut b){Ok(0)=>continue,Ok(_)=>{},Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,Err(_)=>break}let b=b[0];if b==3{break}if b==27{esc.clear();esc.push(b);if prompt.is_some(){prompt=None;}else if !help&&!a.edit{a.target=None;a.face=None;}help=false;continue}if !esc.is_empty(){if esc.len()==1&&b!=b'['{esc.clear();}else{esc.push(b);if esc.len()==2{continue}if b.is_ascii_alphabetic()||b==b'~'{let s=String::from_utf8_lossy(&esc);if let Some(s)=s.strip_prefix("\x1b[<"){let v:Vec<_>=s.trim_end_matches(|c|c=='M'||c=='m').split(';').filter_map(|x|x.parse::<usize>().ok()).collect();if v.len()==3&&b==b'M'{if v[0]==64{a.view.zoom*=1.1}else if v[0]==65{a.view.zoom/=1.1}else if v[0]==0&&v[1]>0&&v[2]>0&&v[1]<=w&&v[2]<=h{if let Some((o,f))=frame.ids[(v[2]-1)*2*w+v[1]-1]{a.target=Some(o);a.face=Some(f)}}}}else{match b{b'Z'=>{a.target=next_target(&frame,a.scene.objects.len(),a.target,true);a.face=None},b'A'=>a.view.pitch+=5.,b'B'=>a.view.pitch-=5.,b'C'=>a.view.yaw+=5.,b'D'=>a.view.yaw-=5.,_=>{}}}esc.clear();}else if esc.len()>64{esc.clear()}continue}}
- if let Some(p)=&mut prompt{match b{13|10=>{let s=prompt.take().unwrap();match a.command(&s){Ok(false)=>break,Err(e)=>a.note=e,_=>{}}},127|8=>{p.pop();},32..=126=>p.push(b as char),_=>{}}continue}
- match b{13|10=>prompt=Some(String::new()),b'?'=>help=!help,b'q'|b'Q'=>{if a.edit{a.edit=false;a.face=None}else{if a.active().is_err(){let _=a.command("/add box");}a.edit=true}},b't'|b'T'=>{let k=h*w+w/2;if let Some((o,f))=frame.ids.get(k).copied().flatten(){a.target=Some(o);a.face=Some(f)}},9=>{a.target=next_target(&frame,a.scene.objects.len(),a.target,false);a.face=None},b'u'|b'U'=>{let _=a.command("/undo");},b'g' if a.edit=>prompt=Some("/g ".into()),b's' if a.edit=>prompt=Some("/scl ".into()),b'r' if a.edit=>prompt=Some("/r ".into()),b'e' if a.edit=>prompt=Some("/e ".into()),b'R'=>prompt=Some("/r ".into()),b'a' if a.edit=>a.face=None,b'a'=>a.view.yaw-=5.,b'd'=>a.view.yaw+=5.,b'w'=>a.view.zoom*=1.1,b's'=>a.view.zoom/=1.1,b'r'=>a.view.pitch+=5.,b'f'=>a.view.pitch-=5.,b'0'=>a.view=View::default(),_=>{}}a.view.zoom=a.view.zoom.clamp(0.05,100.);a.view.pitch=a.view.pitch.clamp(-90.,90.);}
- Ok(())}
-fn main()->Result<(),String>{let args:Vec<String>=std::env::args().skip(1).collect();let has=|s:&str|args.iter().any(|x|x==s);let opt=|s:&str|args.iter().position(|x|x==s).and_then(|i|args.get(i+1));if has("--mcp"){return mcp::run()}if has("--version"){println!("{VERSION}");return Ok(())}if has("--help"){println!("{}",md::ansi(HELP));return Ok(())}if let Some(p)=opt("--markdown").or_else(||opt("--md")){let s=fs::read_to_string(p).map_err(|e|e.to_string())?;print!("{}",if p.ends_with(".json")||p.ends_with(".3draft"){highlight::json(&s)}else{md::ansi(&s)});return Ok(())}let mut a=App::new(if let Some(p)=opt("--scene"){load(p)?}else{Scene{objects:vec![Object::cube("Cube".into(),[205,160,95])]}});if let Some(p)=opt("--script"){for l in fs::read_to_string(p).map_err(|e|e.to_string())?.lines(){if !l.trim().is_empty()&&!l.starts_with('#'){if !a.command(l)?{break}}}}let w=opt("--cols").and_then(|x|x.parse::<usize>().ok()).unwrap_or(80).clamp(10,400);let h=opt("--rows").and_then(|x|x.parse::<usize>().ok()).unwrap_or(24).clamp(4,200);if let Some(n)=opt("--bench"){let n=n.parse::<usize>().map_err(|_|"frame count")?.clamp(1,100000);let t=Instant::now();let mut checksum=0usize;for i in 0..n{a.view.yaw=i as f64*0.5;let f=std::hint::black_box(render(&a.scene,&a.view,w,h*2,None,None));checksum=checksum.wrapping_add(f.rgb.iter().map(|p|p[0]as usize).sum::<usize>());}println!("frames={n} ms={:.3} fps={:.2} checksum={checksum}",t.elapsed().as_secs_f64()*1000.,n as f64/t.elapsed().as_secs_f64());return Ok(())}if has("--once")||!io::stdin().is_terminal(){println!("{}",render(&a.scene,&a.view,w,h*2,a.target,a.face).rows().join("\n"));return Ok(())}run_tui(a,if has("--watch"){opt("--scene").cloned()}else{None})}
+struct App {
+    scene: Scene,
+    view: View,
+    target: Option<usize>,
+    face: Option<usize>,
+    edit: bool,
+    undo: Vec<Scene>,
+    generation: u64,
+    flight: Flight,
+    sel: Selection,
+    material: String,
+    operands: Vec<usize>,
+    undo_floor: usize,
+    size: (usize, usize),
+    tab: Vec<usize>,
+    note: String,
+    shared: Option<std::path::PathBuf>,
+}
+impl App {
+    fn new(scene: Scene) -> Self {
+        let view = View::home(&scene, 80, 48, 1.);
+        Self {
+            view,
+            scene,
+            flight: Flight::default(),
+            sel: Selection {
+                mode: 3,
+                ..Selection::default()
+            },
+            material: "plaster".into(),
+            operands: vec![],
+            undo_floor: 0,
+            size: (80, 48),
+            generation: 0,
+            tab: vec![],
+            target: None,
+            face: None,
+            edit: false,
+            undo: vec![],
+            note: String::new(),
+            shared: None,
+        }
+    }
+    fn reframe(&mut self) {
+        self.view = View::home(&self.scene, self.size.0, self.size.1, self.view.aspect);
+        self.flight.stop();
+        self.operands.clear();
+        self.tab.clear();
+    }
+    fn aim(&mut self, i: usize) {
+        if let Some(o) = self.scene.objects.get(i) {
+            if self.scene.sky {
+                self.view.free();
+                self.flight.steer = true;
+                self.flight.arming = None;
+                self.flight.orbit = false;
+                self.flight.galaxy_brake = false;
+            } else {
+                self.view.aim(o.center);
+            }
+            self.target = Some(i);
+            self.face = None;
+            self.sel.parts.clear();
+        }
+    }
+    fn target_order(&self) -> Vec<usize> {
+        let cam = self.view.camera(self.size.0, self.size.1);
+        let mut ranks: Vec<_> = self
+            .scene
+            .objects
+            .iter()
+            .enumerate()
+            .map(|(i, o)| {
+                let q = cam.project(o.center);
+                let visible = q[2] > 0. && q[0] >= 0. && q[1] >= 0. && q[0] < cam.w && q[1] < cam.h;
+                let score = if visible {
+                    (q[0] - cam.w / 2.).hypot(q[1] - cam.h / 2.)
+                } else {
+                    len(sub(o.center, cam.eye))
+                };
+                (!visible, score, i)
+            })
+            .collect();
+        ranks.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+        ranks.into_iter().map(|v| v.2).collect()
+    }
+    fn cycle(&mut self, reverse: bool) {
+        if self.tab.is_empty() {
+            self.tab = self.target_order()
+        }
+        let n = self.tab.len();
+        if n == 0 {
+            return;
+        }
+        let i = self
+            .target
+            .and_then(|t| self.tab.iter().position(|&i| i == t));
+        let k = if reverse {
+            i.map_or(n - 1, |i| (i + n - 1) % n)
+        } else {
+            i.map_or(0, |i| (i + 1) % n)
+        };
+        self.aim(self.tab[k])
+    }
+    fn reload(&mut self, scene: Scene) {
+        let old = self
+            .target
+            .and_then(|i| self.scene.objects.get(i))
+            .map(|o| (o.name.clone(), o.original.get("id").clone()));
+        self.scene = scene;
+        self.target = old.and_then(|(name, id)| {
+            self.scene.objects.iter().position(|o| {
+                if id.is_null() {
+                    o.name == name
+                } else {
+                    o.original.get("id") == &id
+                }
+            })
+        });
+        self.face = None;
+        self.edit = false;
+        self.sel.parts.clear();
+        self.tab.clear();
+        self.operands.clear();
+        self.undo_floor = 0;
+        self.undo.clear();
+        self.note = "scene reloaded".into()
+    }
+    fn surface(&self) -> Face {
+        let materials = self.scene.materials();
+        let m = materials
+            .iter()
+            .find(|m| m.get("name").str() == self.material);
+        Face {
+            mat: self.material.clone(),
+            color: color(m.map_or("#c8c8c8", |m| m.get("color").str())),
+            emit: m.map_or(0., |m| m.get("emit").num()),
+            ..Face::default()
+        }
+    }
+    fn snapshot(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.tab.clear();
+        if self.undo.len() == 32 {
+            self.undo.remove(0);
+            self.undo_floor = self.undo_floor.saturating_sub(1);
+        }
+        self.undo.push(self.scene.clone())
+    }
+    fn export(&self, p: &std::path::Path) -> Result<(), String> {
+        if self
+            .shared
+            .as_ref()
+            .is_some_and(|active| p.canonicalize().ok().as_ref() == Some(active))
+        {
+            return Ok(());
+        }
+        store::atomic(p, &self.scene.write()).map_err(|e| e.to_string())
+    }
+    fn active(&self) -> Result<usize, String> {
+        self.target
+            .filter(|&i| i < self.scene.objects.len())
+            .ok_or("select an object first".into())
+    }
+    fn command(&mut self, line: &str) -> Result<bool, String> {
+        let line = line.trim();
+        let (cmd, arg) = line.split_once(' ').unwrap_or((line, ""));
+        let arg = arg.trim();
+        let words: Vec<_> = arg.split_whitespace().collect();
+        match cmd {
+            "/q" | "/quit" => return Ok(false),
+            "/png" | "/svg" | "/gif" | "/anim" => {
+                let animated = matches!(cmd, "/gif" | "/anim");
+                let size = if animated {
+                    self.size.0
+                } else {
+                    words
+                        .first()
+                        .map(|s| s.parse::<usize>().map_err(|_| "expected pixel width"))
+                        .transpose()?
+                        .unwrap_or(if cmd == "/png" { 1200 } else { 800 })
+                };
+                if !(8..=2048).contains(&size) {
+                    return Err("width must be 8–2048 pixels".into());
+                }
+                let h = (size as f64 * self.size.1 as f64 / self.size.0 as f64 * self.view.aspect)
+                    .round()
+                    .clamp(1., 2048.) as usize;
+                let frames = if animated {
+                    words
+                        .first()
+                        .map(|s| s.parse::<usize>().map_err(|_| "invalid frame count"))
+                        .transpose()?
+                        .unwrap_or(36)
+                } else {
+                    1
+                };
+                let seconds = words
+                    .get(1)
+                    .map(|s| s.parse::<f64>().map_err(|_| "invalid seconds"))
+                    .transpose()?
+                    .unwrap_or(3.);
+                if !(1..=240).contains(&frames) || !seconds.is_finite() || seconds <= 0. {
+                    return Err("expected 1–240 frames and positive seconds".into());
+                }
+                let mut view = self.view.clone();
+                view.aspect = 1.;
+                let ext = if cmd == "/anim" { "svg" } else { &cmd[1..] };
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos();
+                let p = store::root()
+                    .join("exports")
+                    .join(format!("view-{stamp}.{ext}"));
+                let bytes = match cmd {
+                    "/png" => export::png(&render(&self.scene, &view, size, h, None, None)),
+                    "/gif" => export::gif(&self.scene, &view, size, h, frames, seconds),
+                    _ => export::svg(&self.scene, &view, size, h, frames, seconds).into_bytes(),
+                };
+                store::atomic_bytes(&p, &bytes).map_err(|e| e.to_string())?;
+                self.note = p.display().to_string();
+            }
+            "/spin" => self.flight.spin = switch(arg, self.flight.spin)?,
+            "/edges" | "/outline" => self.view.edges = switch(arg, self.view.edges)?,
+            "/freeze" => self.flight.frozen = switch(arg, self.flight.frozen)?,
+            "/mat" => {
+                if !self
+                    .scene
+                    .materials()
+                    .iter()
+                    .any(|m| m.get("name").str() == arg)
+                {
+                    return Err("unknown material".into());
+                }
+                self.material = arg.into()
+            }
+            "/go" => {
+                if words.len() == 3
+                    && words
+                        .iter()
+                        .all(|s| s.parse::<f64>().is_ok_and(f64::is_finite))
+                {
+                    let p = std::array::from_fn(|i| words[i].parse().unwrap());
+                    self.target = None;
+                    self.view.free();
+                    self.view.center = p;
+                } else {
+                    let i = self.find(arg).first().copied().ok_or("target not found")?;
+                    self.aim(i);
+                }
+            }
+            "/bool" => {
+                let [a, b] = self.operands.as_slice() else {
+                    return Err("B picks two objects".into());
+                };
+                let (a, b) = (*a, *b);
+                let lhs = self.scene.objects.get(a).ok_or("first operand is gone")?;
+                let rhs = self.scene.objects.get(b).ok_or("second operand is gone")?;
+                let result = if arg == "subtract-swap" {
+                    csg::boolean(rhs, lhs, "subtract")?
+                } else {
+                    csg::boolean(lhs, rhs, arg)?
+                };
+                self.snapshot();
+                self.scene.objects.remove(a.max(b));
+                self.scene.objects.remove(a.min(b));
+                self.scene.objects.push(result);
+                self.target = Some(self.scene.objects.len() - 1);
+                self.operands.clear();
+                self.face = None;
+                self.sel.parts.clear();
+            }
+            "/ver" => self.note = BUILD.into(),
+            "/add" => {
+                let i = self.scene.objects.len();
+                let mut o = primitive(arg, &format!("{} {}", arg, i + 1), &self.surface())?;
+                for p in &mut o.p {
+                    p[0] += i as f64 * 1.2
+                }
+                o.refresh();
+                self.snapshot();
+                self.scene.objects.push(o);
+                self.sel.parts.clear();
+                self.face = None;
+                self.target = Some(i);
+            }
+            "/new" => {
+                self.snapshot();
+                self.scene = Scene::default();
+                self.reframe();
+                self.sel.parts.clear();
+                self.target = None;
+                self.face = None;
+                self.edit = false
+            }
+            "/l" | "/load" | "/open" | "/merge" => {
+                if arg.is_empty() {
+                    self.note = store::catalog()
+                        .into_iter()
+                        .map(|(name, _)| name)
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    return Ok(true);
+                }
+                let s = load(arg)?;
+                if matches!(cmd, "/merge" | "/open") {
+                    self.merge(s)?
+                } else {
+                    self.snapshot();
+                    self.scene = s;
+                    self.reframe();
+                    self.sel.parts.clear();
+                    self.target = None;
+                    self.face = None;
+                    self.edit = false
+                }
+            }
+            "/s" | "/save" => {
+                let default_name = format!(
+                    "scene-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                );
+                let arg = if arg.is_empty() { &default_name } else { arg };
+                let p = store::path(arg).map_err(|e| e.to_string())?;
+                self.export(&p)?;
+                self.note = format!("saved {}", p.display())
+            }
+            "/dl" => {
+                if arg.is_empty() {
+                    return Err("/dl file.3draft".into());
+                }
+                self.export(std::path::Path::new(arg))?;
+                self.note = format!("saved {arg}")
+            }
+            "/store" => self.note = store::list().map_err(|e| e.to_string())?.join(" | "),
+            "/forget" => {
+                fs::remove_file(store::path(arg).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+                self.note = "removed".into()
+            }
+            "/ls" | "/objects" => {
+                self.note = self
+                    .scene
+                    .objects
+                    .iter()
+                    .map(|o| o.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            }
+            "/view" => {
+                let (y, p) = match arg {
+                    "front" => (0., 0.),
+                    "back" => (180., 0.),
+                    "left" => (-90., 0.),
+                    "right" => (90., 0.),
+                    "top" => (0., 90.),
+                    "bottom" => (0., -90.),
+                    "iso" => (-45., 30.),
+                    _ => return Err("unknown view".into()),
+                };
+                self.view.yaw = y;
+                self.view.pitch = p;
+                self.view.ortho = arg != "iso" && !self.view.sky;
+            }
+            "/fit" | "/reset" => self.reframe(),
+            "/zoom" => {
+                self.view.zoom = arg
+                    .parse::<f64>()
+                    .map_err(|_| "zoom number")?
+                    .clamp(0.05, 100.);
+                if !self.view.zoom.is_finite() {
+                    self.view.zoom = 1.
+                }
+            }
+            "/face" => {
+                let i = self.active()?;
+                let f = arg.parse::<usize>().map_err(|_| "face index")?;
+                if f >= self.scene.objects[i].f.len() {
+                    return Err("face index out of bounds".into());
+                }
+                self.face = Some(f);
+                self.sel.mode = 3;
+                self.sel.parts = [Part::Polygon(f)].into();
+            }
+            "/g" | "/scl" | "/r" => {
+                if words.len() != 2 {
+                    return Err("axis and value required".into());
+                }
+                let axis = match words[0] {
+                    "x" => 0,
+                    "y" => 1,
+                    "z" => 2,
+                    "all" if cmd == "/scl" => 3,
+                    _ => return Err("axis x/y/z".into()),
+                };
+                let n = words[1].parse::<f64>().map_err(|_| "value")?;
+                if !n.is_finite() {
+                    return Err("finite value required".into());
+                }
+                let i = self.active()?;
+                let o = &self.scene.objects[i];
+                if o.star.is_some() {
+                    return Err("cannot transform a sky point as a mesh".into());
+                }
+                let ids = if self.edit && !self.sel.parts.is_empty() {
+                    self.sel.vertices(o)
+                } else if self.edit {
+                    self.face
+                        .and_then(|f| o.f.get(f))
+                        .map(|f| f.v.clone())
+                        .unwrap_or_else(|| (0..o.p.len()).collect())
+                } else {
+                    (0..o.p.len()).collect()
+                };
+                self.snapshot();
+                self.scene.objects[i].transform(
+                    match cmd {
+                        "/g" => "g",
+                        "/r" => "r",
+                        _ => "s",
+                    },
+                    axis,
+                    n,
+                    &ids,
+                )
+            }
+            "/e" => {
+                if !self.edit {
+                    return Err("enter Q mode first".into());
+                }
+                let i = self.active()?;
+                let f = self.face.ok_or("select face")?;
+                let d = arg.parse::<f64>().map_err(|_| "distance")?;
+                if !d.is_finite() {
+                    return Err("finite distance required".into());
+                }
+                self.snapshot();
+                self.scene.objects[i].extrude(f, d)?
+            }
+            "/undo" => {
+                if self.edit && self.undo.len() <= self.undo_floor {
+                    return Ok(true);
+                }
+                if let Some(s) = self.undo.pop() {
+                    self.generation += 1;
+                    self.scene = s;
+                    self.sel.parts.clear();
+                    self.face = None;
+                    self.tab.clear();
+                    if !self.edit || self.active().is_err() {
+                        self.reframe();
+                        self.target = None;
+                        self.edit = false
+                    }
+                }
+            }
+            "/help" | "/keys" => {
+                self.note = "Q edit | T target | Enter commands | ? help | Ctrl+C exit".into()
+            }
+            "" => {}
+            _ if !cmd.starts_with('/') => {
+                let i = self.find(line).first().copied().ok_or("target not found")?;
+                self.aim(i);
+                self.tab.clear();
+            }
+            _ => return Err(format!("unsupported command: {cmd}")),
+        }
+        Ok(true)
+    }
+}
+fn switch(arg: &str, prev: bool) -> Result<bool, String> {
+    match arg {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        "" => Ok(!prev),
+        _ => Err("expected on or off".into()),
+    }
+}
+impl App {
+    fn find(&self, text: &str) -> Vec<usize> {
+        let q = fold(text);
+        let eye = self.view.eye();
+        let mut hits: Vec<_> = self
+            .scene
+            .objects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, o)| {
+                let n = fold(&o.name);
+                let kind = o.star.as_ref().map_or("", |p| &p.kind);
+                (n.contains(&q) || fold(kind).contains(&q))
+                    .then(|| (n != q, !n.starts_with(&q), len(sub(o.center, eye)), i))
+            })
+            .collect();
+        hits.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then(a.1.cmp(&b.1))
+                .then(a.2.total_cmp(&b.2))
+                .then(a.3.cmp(&b.3))
+        });
+        hits.into_iter().map(|v| v.3).collect()
+    }
+    fn merge(&mut self, s: Scene) -> Result<(), String> {
+        let mut left = self.scene.document();
+        let mut right = s.document();
+        let mut objs = left.take("objects").arr().to_vec();
+        objs.extend(right.take("objects").arr().iter().cloned());
+        if let J::Obj(fields) = right {
+            for (k, v) in fields {
+                match k.as_str() {
+                    "format" | "name" => {}
+                    "version" => {
+                        left.put("version", J::Num(v.num().max(left.get("version").num())))
+                    }
+                    "palette" => {
+                        let mut pal = left.get("palette").arr().to_vec();
+                        for m in v.arr() {
+                            if let Some(existing) =
+                                pal.iter().find(|x| x.get("name") == m.get("name"))
+                            {
+                                if existing != m {
+                                    return Err(format!(
+                                        "conflicting material {}",
+                                        m.get("name").str()
+                                    ));
+                                }
+                            } else {
+                                pal.push(m.clone())
+                            }
+                        }
+                        left.put(&k, J::Arr(pal))
+                    }
+                    "prototypes" => {
+                        let mut p = left.take(&k);
+                        if p.is_null() {
+                            p = J::object()
+                        }
+                        if let J::Obj(protos) = v {
+                            for (key, def) in protos {
+                                if !p.get(&key).is_null() && p.get(&key) != &def {
+                                    return Err(format!("conflicting prototype {key}"));
+                                }
+                                p.put(&key, def)
+                            }
+                        }
+                        left.put(&k, p)
+                    }
+                    _ => {
+                        if left.get(&k).is_null() {
+                            left.put(&k, v)
+                        } else if left.get(&k) != &v {
+                            return Err(format!("conflicting scene field {k}"));
+                        }
+                    }
+                }
+            }
+        }
+        left.put("objects", J::Arr(objs));
+        let merged = Scene::read(&left.encode())?;
+        self.snapshot();
+        self.scene = merged;
+        Ok(())
+    }
+}
+fn fold(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'â' => 'a',
+            'é' | 'è' | 'ê' => 'e',
+            'í' | 'ï' => 'i',
+            'ó' | 'ö' | 'ő' | 'ô' => 'o',
+            'ú' | 'ü' | 'ű' => 'u',
+            v => v,
+        })
+        .collect()
+}
+fn main() -> Result<(), String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let has = |s: &str| args.iter().any(|x| x == s);
+    let opt = |s: &str| {
+        args.iter()
+            .position(|x| x == s)
+            .and_then(|i| args.get(i + 1))
+    };
+    if has("--mcp") {
+        return mcp::run(opt("--session").or(opt("--scene")).map(Into::into));
+    }
+    if has("--version") {
+        println!("{BUILD}");
+        return Ok(());
+    }
+    if has("--help") {
+        println!("{}", md::ansi(HELP));
+        return Ok(());
+    }
+    if let Some(p) = opt("--markdown").or_else(|| opt("--md")) {
+        let s = fs::read_to_string(p).map_err(|e| e.to_string())?;
+        let width = opt("--width")
+            .or(opt("--cols"))
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or_else(|| terminal::size().0)
+            .clamp(8, 1000);
+        println!("{}", md::document(&s, p, width).join("\n"));
+        return Ok(());
+    }
+    let scene_arg = opt("--scene").or_else(|| args.first().filter(|s| !s.starts_with('-')));
+    let load_start = Instant::now();
+    let scene = if let Some(p) = scene_arg {
+        load(p)?
+    } else if opt("--session").is_some() {
+        Scene::default()
+    } else {
+        Scene {
+            objects: vec![Object::cube("Cube".into(), [205, 160, 95])],
+            ..Scene::default()
+        }
+    };
+    let load_ms = load_start.elapsed().as_secs_f64() * 1000.;
+    let mut a = App::new(scene);
+    let w = opt("--cols")
+        .and_then(|x| x.parse::<usize>().ok())
+        .unwrap_or(80)
+        .clamp(10, 400);
+    let h = opt("--rows")
+        .and_then(|x| x.parse::<usize>().ok())
+        .unwrap_or(24)
+        .clamp(4, 200);
+    a.size = (w, h * 2);
+    a.reframe();
+    if let Some(p) = opt("--script") {
+        for l in fs::read_to_string(p).map_err(|e| e.to_string())?.lines() {
+            if !l.trim().is_empty() && !l.starts_with('#') && !a.command(l)? {
+                break;
+            }
+        }
+    }
+    if let Some(n) = opt("--bench") {
+        let n = n
+            .parse::<usize>()
+            .map_err(|_| "frame count")?
+            .clamp(1, 100000);
+        return bench::run(&mut a, n, has("--bench-stream"), load_ms);
+    }
+    if has("--once") || !io::stdin().is_terminal() {
+        println!(
+            "{}",
+            render(&a.scene, &a.view, w, h * 2, a.target, a.face)
+                .rows()
+                .join("\n")
+        );
+        return Ok(());
+    }
+    let path = if let Some(p) = opt("--session") {
+        Some(p.into())
+    } else if has("--watch") {
+        Some(store::resolve(
+            opt("--scene").ok_or("--watch needs --scene")?,
+        )?)
+    } else if scene_arg.is_none() {
+        Some(Session::default_path())
+    } else {
+        None
+    };
+    let session = if let Some(path) = path {
+        let (session, scene) = Session::open(path, &a.scene)?;
+        a.shared = session.path.canonicalize().ok();
+        a.reload(scene);
+        a.reframe();
+        Some(session)
+    } else {
+        None
+    };
+    ui::run(a, session)
+}
+
+#[cfg(test)]
+mod round3_tests;
