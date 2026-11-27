@@ -1,10 +1,10 @@
 [package]
 name = "spi3derr-gpt6"
-version = "26.11.27002"
+version = "26.11.27003"
 edition = "2021"
 license = "MIT"
 description = "Dependency-free terminal 3D editor - GPT-6 competition entry"
-repository = "https://github.com/Pengeszikra/spi3der--gpt6"
+repository = "https://github.com/Pengeszikra/spi3derr--gpt6"
 keywords = ["3d", "terminal", "modeling", "editor", "cli"]
 categories = ["command-line-utilities", "graphics"]
 
