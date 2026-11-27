@@ -22,3 +22,14 @@ Store defaults to ~/.spi3derr/store; SPI3DER_STORE overrides it. Save replaces t
 Known gaps: full reference keyboard mapping, vertex/edge selection, concave polygons, perspective/flight, sky/instances, full Markdown layout, live resize while idle, mouse drag, Unicode interactive input, robust escape decoding, signal restoration, boolean, mirror, bevel, loop cut, saw, lathe, palette, story playback and exports. Do not treat benchmark as parity comparison yet.
 
 See HELP.md for implemented commands. Rust compiler was unavailable in authoring environment; CI is configured to compile and test this prototype.
+
+## Round II — incremental update
+
+- `--mcp`: newline-delimited JSON-RPC stdio, initialize, ping, tools/list and tools/call. The server owns an independent scene. Use /dl with a file path to publish to the viewer.
+- `--scene table.3draft --watch`: polls the file, retains last valid geometry on parse errors, preserves view settings and target by name. Auto-fit bounds still change with geometry; polling currently redraws even on idle.
+- `--md file.json`: JSON lexical highlighting, also .3draft; alias for --markdown.
+- `/load` without arguments lists local store names.
+
+Copilot MCP config: command = absolute path to target/release/spi3derr, args = ["--mcp"], type = stdio. No external crates.
+
+Still incomplete: full reference Q tools, complete help/palette, exact flight/targeting, sky support, shared live editing conflicts, full syntax highlighting parity. CI compilation not yet verified.

@@ -18,3 +18,9 @@ Outside Q, uppercase R opens object rotation.
 - /dl file.3draft — export geometry
 - /view front, /view iso, /fit, /zoom 2
 - /new, /ls, /ver, /quit
+
+## Round II
+- /load without arguments lists store entries.
+- --mcp starts a separate scene server over stdio.
+- --scene FILE --watch reloads valid changes.
+- --md FILE prints Markdown or highlighted JSON.
